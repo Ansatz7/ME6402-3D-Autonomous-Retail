@@ -75,22 +75,31 @@ $$
 - `src/evaluation/planogram_evaluator.py`: core metric implementation for Delta D, 3D IoU, PCR, WCI.
 - `src/evaluation/metrics_demo.py`: minimal runnable example for evaluator output.
 - `scripts/reconstruction/setup_3dgs.sh`: clone/check `graphdeco-inria/gaussian-splatting` into `third_party/`.
+- `scripts/reconstruction/check_3dgs_env.sh`: check GPU/CUDA/COLMAP/Python dependencies before running training.
 - `scripts/reconstruction/run_colmap.sh`: one-click COLMAP sparse+dense preparation pipeline.
 - `scripts/reconstruction/run_3dgs_train.sh`: launch upstream `train.py` for 3DGS training.
+- `scripts/reconstruction/run_3dgs_demo.sh`: run a short training on a prepared COLMAP-format demo dataset.
 - `configs/reconstruction/scene_example.env`: example path configuration for quick trial.
 - `requirements.txt`: Python dependency baseline for all members.
 
 ### Quick Start: Reproduce 3DGS Pipeline (Feature Branch)
+0. Integration strategy (recommended):
+	- Do NOT copy all 3DGS files into project root.
+	- Keep upstream repo under `third_party/gaussian-splatting` and call it via scripts.
+	- This keeps your repo clean and makes upstream updates easier.
 1. Switch to feature branch:
 	- `git checkout feat/pipeline-skeleton`
-2. Prepare sample images under `data/raw/scene01/`.
-3. Clone upstream 3DGS repo:
+2. Clone upstream 3DGS repo:
 	- `bash scripts/reconstruction/setup_3dgs.sh`
-4. Run COLMAP preprocessing:
+3. Run environment check:
+	- `bash scripts/reconstruction/check_3dgs_env.sh`
+4. Fast demo path (if you already have a COLMAP-format demo dataset):
+	- `bash scripts/reconstruction/run_3dgs_demo.sh <source_path> <model_output_dir> 300`
+5. Run COLMAP preprocessing for your own photos:
 	- `bash scripts/reconstruction/run_colmap.sh data/raw/scene01 data/processed/reconstruction/scene01`
-5. Launch 3DGS training:
+6. Launch 3DGS training:
 	- `bash scripts/reconstruction/run_3dgs_train.sh third_party/gaussian-splatting data/processed/reconstruction/scene01/dense data/processed/reconstruction/scene01/gs_model`
-6. Optional dry-run command orchestration test:
+7. Optional dry-run command orchestration test:
 	- `python3 src/reconstruction/runner.py`
 
 Notes:
@@ -130,18 +139,27 @@ Notes:
 - `src/evaluation/`: 指标计算与评估模块。
 - 各目录中的 `runner.py` 为阶段入口，便于组员并行开发。
 - `planogram_evaluator.py` 为评价算法核心实现，建议统一维护接口，避免组内调用不一致。
+- `scripts/reconstruction/check_3dgs_env.sh` 会在训练前检查依赖，建议先执行。
+- `scripts/reconstruction/run_3dgs_demo.sh` 用于快速验证示例数据可训练。
 
 ### 3DGS 快速复现（功能分支）
+0. 集成策略（推荐）：
+	- 不要把3DGS仓库内容直接铺到项目根目录。
+	- 建议放在 `third_party/gaussian-splatting`，由本项目脚本调用。
+	- 这样更容易维护、升级上游版本，也不会污染主仓库结构。
 1. 切换到功能分支：
 	- `git checkout feat/pipeline-skeleton`
-2. 准备样例图像到 `data/raw/scene01/`。
-3. 拉取上游3DGS仓库：
+2. 拉取上游3DGS仓库：
 	- `bash scripts/reconstruction/setup_3dgs.sh`
-4. 执行COLMAP预处理：
+3. 先做环境检查：
+	- `bash scripts/reconstruction/check_3dgs_env.sh`
+4. 快速示例路径（你已有 COLMAP 格式示例数据时）：
+	- `bash scripts/reconstruction/run_3dgs_demo.sh <source_path> <model_output_dir> 300`
+5. 对你自己的图片执行COLMAP预处理：
 	- `bash scripts/reconstruction/run_colmap.sh data/raw/scene01 data/processed/reconstruction/scene01`
-5. 启动3DGS训练：
+6. 启动3DGS训练：
 	- `bash scripts/reconstruction/run_3dgs_train.sh third_party/gaussian-splatting data/processed/reconstruction/scene01/dense data/processed/reconstruction/scene01/gs_model`
-6. 可选：先做 dry-run 验证命令链：
+7. 可选：先做 dry-run 验证命令链：
 	- `python3 src/reconstruction/runner.py`
 
 说明：
