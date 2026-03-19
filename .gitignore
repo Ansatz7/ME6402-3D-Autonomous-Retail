@@ -21,3 +21,6 @@ logs/
 # Python cache
 *.pyc
 .ipynb_checkpoints/
+
+# Third-party code checkout
+third_party/gaussian-splatting/
