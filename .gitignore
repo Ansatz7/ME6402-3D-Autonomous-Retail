@@ -1,0 +1,23 @@
+__pycache__/
+*.pt
+*.ply
+.DS_Store
+目标和进度.md
+*.pth
+*.ckpt
+*.onnx
+
+# Dataset and generated artifacts
+data/raw/*
+data/processed/*
+!data/raw/.gitkeep
+!data/processed/.gitkeep
+
+# Model weights and logs
+weights/*
+!weights/.gitkeep
+logs/
+
+# Python cache
+*.pyc
+.ipynb_checkpoints/
