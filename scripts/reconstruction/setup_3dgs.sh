@@ -15,6 +15,13 @@ else
 fi
 
 echo "[setup] Done. Next steps:"
-echo "  1) Create and activate a Python env"
-echo "  2) pip install -r $GS_DIR/requirements.txt"
-echo "  3) Build required extensions as documented by upstream repo"
+echo "  1) Ensure Conda environment 'gaussian_splatting' is created and has PyTorch installed"
+echo "  2) Activate the environment: conda activate gaussian_splatting"
+echo "  3) Install requirements: pip install -r $GS_DIR/requirements.txt"
+echo "  4) Build extensions as documented by upstream repo:"
+echo "     cd $GS_DIR/submodules/diff-gaussian-rasterization"
+echo "     pip install -e ."
+echo "     cd ../simple-knn"
+echo "     pip install -e ."
+echo "     cd ../fused-ssim"
+echo "     pip install -e ."

@@ -8,7 +8,8 @@ if [[ $# -lt 2 ]]; then
 fi
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-PYTHON_BIN="$ROOT_DIR/.venv/bin/python"
+CONDA_HOME="${CONDA_HOME:-$HOME/miniconda3}"
+ENV_NAME="gaussian_splatting"
 GS_DIR="$ROOT_DIR/third_party/gaussian-splatting"
 SOURCE_PATH="$1"
 MODEL_PATH="$2"
@@ -27,7 +28,10 @@ fi
 
 mkdir -p "$MODEL_PATH"
 
-"$PYTHON_BIN" "$GS_DIR/train.py" \
+# Activate conda environment
+source "$CONDA_HOME/bin/activate" "$ENV_NAME"
+
+python "$GS_DIR/train.py" \
   -s "$SOURCE_PATH" \
   -m "$MODEL_PATH" \
   --iterations "$ITERATIONS"
