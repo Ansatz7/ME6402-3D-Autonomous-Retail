@@ -11,11 +11,17 @@ __pycache__/
 third_party/gaussian-splatting/
 
 # Dataset and generated artifacts
+data/*
 data/raw/*
+data/nerf_synthetic/*
+data/official/*
 data/processed/*
 data/nerf_synthetic/*
 !data/raw/.gitkeep
 !data/processed/.gitkeep
+
+# docker
+docker/*
 
 # Model weights and logs
 weights/*

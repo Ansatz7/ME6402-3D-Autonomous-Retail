@@ -1,0 +1,88 @@
+# ╔══════════════════════════════════════════════════════════════╗
+# ║          3DGS Pipeline 配置文件 — 所有参数在这里改          ║
+# ╚══════════════════════════════════════════════════════════════╝
+# 修改此文件后，在 Notebook 中重新运行 Cell 1 即可生效（无需重启 kernel）
+
+# ─────────────────────────────────────────────
+# 数据集
+# ─────────────────────────────────────────────
+dataset:
+  # 数据来源类型：official_tandt | custom | minimal | nerf_synthetic
+  source: official_tandt
+
+  # official_tandt 时：选择场景名（playroom / truck / train / ...）
+  scene: playroom
+
+  # custom 时：自定义场景相对路径（相对于项目根目录）
+  # 例：data/raw/my_scene  或  data/colmap_workspace/my_scene/dense
+  custom_path: data/raw/custom_scene_01
+
+  # 图像子目录名（通常是 images，COLMAP dense 输出也是 images）
+  images_dir: images
+
+  # 是否在训练前先跑 COLMAP（custom 自有数据通常需要开启）
+  use_colmap: false
+
+# ─────────────────────────────────────────────
+# 视频抽帧（Section 3：先抽帧，再跑 COLMAP）
+# ─────────────────────────────────────────────
+video:
+  enabled: false
+
+  # 输入视频路径（支持 ~ 展开，也支持相对路径）
+  input_video: ~/Videos/recording.mp4
+
+  # 场景名：抽出的帧存入 data/raw/<scene_name>/images/
+  scene_name: custom_scene_01
+
+  fps: 2                # 每秒抽取帧数（建议 1-5）
+  jpeg_quality: 2       # ffmpeg -q:v，2=最高质量，31=最低
+  start_seconds: 0      # 从第几秒开始（0=从头）
+  duration_seconds: 0   # 抽取时长（0=到结尾）
+
+# ─────────────────────────────────────────────
+# COLMAP 相机标定
+# ─────────────────────────────────────────────
+colmap:
+  # 工作目录（相对项目根）：输出放到 <workspace>/<scene_name>/
+  workspace: data/colmap_workspace
+
+  camera_model: PINHOLE   # PINHOLE | SIMPLE_PINHOLE | SIMPLE_RADIAL | RADIAL
+
+  # 训练时使用 COLMAP undistorted 输出（推荐开启，3DGS 直接识别）
+  use_undistorted_for_training: true
+
+  # 完成后自动回填内参到 config（仅供参考，不影响训练）
+  auto_update_intrinsics: true
+
+# ─────────────────────────────────────────────
+# 3DGS 训练
+# ─────────────────────────────────────────────
+training:
+  iterations: 5000        # 快速验证用 300-5000；高质量用 30000
+
+  # 分辨率倍率（1=原始，2=1/2，4=1/4）
+  # RTX 4060 8GB 建议从 2 开始；OOM 时自动降到 4
+  resolution: 2
+
+  white_background: false
+  sh_degree: 3
+
+  # 输出根目录（相对项目根），每次训练会在此下创建子目录
+  output_dir: outputs
+
+  # 中间保存点（迭代数）
+  save_iterations: [1000, 3000, 5000]
+  test_iterations: [1000, 3000, 5000]
+
+# ─────────────────────────────────────────────
+# 结果查看
+# ─────────────────────────────────────────────
+viewer:
+  # 查看后端：open3d（推荐）| sibr | none
+  backend: sibr
+
+  sibr:
+    docker_image: sibr-builder:ubuntu22.04-cuda11.8
+    # 脚本路径（相对项目根）
+    script: scripts/reconstruction/run_sibr_in_docker.sh

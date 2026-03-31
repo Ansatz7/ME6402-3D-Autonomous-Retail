@@ -12,8 +12,33 @@ PROJECT_ROOT=$(cd "$SCRIPT_DIR/.." && pwd)
 export CONDA_HOME="${CONDA_HOME:-$HOME/miniconda3}"
 export ENV_NAME="gaussian_splatting"
 export GS_DIR="$PROJECT_ROOT/third_party/gaussian-splatting"
-export DATA_DIR="$PROJECT_ROOT/data/minimal_dataset"
 export OUTPUT_DIR="$PROJECT_ROOT/outputs/3dgs_demo_300iter"
+
+# 数据集优先级：用户显式设置 DATA_DIR > 官方样例 truck > minimal_dataset
+DEFAULT_OFFICIAL_DATA="$PROJECT_ROOT/data/official/tandt_db/tandt/truck"
+DEFAULT_MINIMAL_DATA="$PROJECT_ROOT/data/minimal_dataset"
+export DATA_DIR="${DATA_DIR:-$DEFAULT_OFFICIAL_DATA}"
+
+# 识别 3DGS 可用数据结构（COLMAP 或 Blender）
+is_valid_scene() {
+  local p="$1"
+  [[ -d "$p/sparse/0" && -d "$p/images" ]] || \
+  [[ -f "$p/transforms_train.json" && -f "$p/transforms_test.json" ]]
+}
+
+if ! is_valid_scene "$DATA_DIR"; then
+  if is_valid_scene "$DEFAULT_OFFICIAL_DATA"; then
+    DATA_DIR="$DEFAULT_OFFICIAL_DATA"
+  elif is_valid_scene "$DEFAULT_MINIMAL_DATA"; then
+    DATA_DIR="$DEFAULT_MINIMAL_DATA"
+  else
+    echo "✗ 未找到可用数据集。"
+    echo "  期望 COLMAP 结构: <scene>/images + <scene>/sparse/0"
+    echo "  或 Blender 结构: transforms_train.json + transforms_test.json"
+    echo "  建议先下载官方数据到: $DEFAULT_OFFICIAL_DATA"
+    exit 1
+  fi
+fi
 
 echo "========================================"
 echo "3DGS 快速演示 - 300 Iteration"
