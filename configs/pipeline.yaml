@@ -8,20 +8,19 @@
 # ─────────────────────────────────────────────
 dataset:
   # 数据来源类型：official_tandt | custom | minimal | nerf_synthetic
-  source: official_tandt
+  source: custom
 
   # official_tandt 时：选择场景名（playroom / truck / train / ...）
-  scene: playroom
+  scene: team_data2
 
   # custom 时：自定义场景相对路径（相对于项目根目录）
-  # 例：data/raw/my_scene  或  data/colmap_workspace/my_scene/dense
-  custom_path: data/raw/custom_scene_01
+  custom_path: data/team_data2
 
   # 图像子目录名（通常是 images，COLMAP dense 输出也是 images）
   images_dir: images
 
   # 是否在训练前先跑 COLMAP（custom 自有数据通常需要开启）
-  use_colmap: false
+  use_colmap: true
 
 # ─────────────────────────────────────────────
 # 视频抽帧（Section 3：先抽帧，再跑 COLMAP）
@@ -59,7 +58,7 @@ colmap:
 # 3DGS 训练
 # ─────────────────────────────────────────────
 training:
-  iterations: 5000        # 快速验证用 300-5000；高质量用 30000
+  iterations: 30000       # 快速验证用 300-5000；高质量用 30000
 
   # 分辨率倍率（1=原始，2=1/2，4=1/4）
   # RTX 4060 8GB 建议从 2 开始；OOM 时自动降到 4
@@ -72,8 +71,8 @@ training:
   output_dir: outputs
 
   # 中间保存点（迭代数）
-  save_iterations: [1000, 3000, 5000]
-  test_iterations: [1000, 3000, 5000]
+  save_iterations: [7000, 30000]
+  test_iterations: [7000, 30000]
 
 # ─────────────────────────────────────────────
 # 结果查看
@@ -104,7 +103,8 @@ saga:
   # 留空时自动使用 dataset.path
   # 官方数据示例：data/official/tandt_db/db/playroom
   # 自定义数据示例：data/raw/custom_scene_01
-  image_root: "data/colmap_workspace/custom_scene_01/dense"
+  image_root: "data/colmap_workspace/team_data2/dense"
 
   # 要分割的 3DGS 模型路径（留空时使用 training.output_dir）
-  model_path: "outputs/3dgs_custom_scene_01_5000iter"
+  # 使用同学在服务器上跑的高质量 30000 iter 模型
+  model_path: "outputs/3dgs_team_data2_30000iter"

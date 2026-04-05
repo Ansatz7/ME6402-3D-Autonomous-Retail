@@ -28,6 +28,24 @@ from .training import run_training, analyze_results
 
 from .viewer import open_viewer, launch_sibr, find_latest_ply, find_latest_model
 
+from .saga import (
+    check_saga_ready,
+    download_sam_checkpoint,
+    create_downsampled_images,
+    extract_sam_masks,
+    extract_sam_features,
+    train_saga_features,
+    compute_scales,
+    open_saga_gui,
+    open_bbox_viewer,
+    open_saga_notebook,
+    query_by_text,
+    get_3d_bbox_from_mask,
+    export_bboxes,
+    run_saga_pipeline,
+    load_saga_config,
+)
+
 
 def run_pipeline(cfg: dict) -> bool:
     """
@@ -98,4 +116,20 @@ __all__ = [
     "find_latest_ply",
     "find_latest_model",
     "run_pipeline",
+    # SAGA
+    "check_saga_ready",
+    "download_sam_checkpoint",
+    "create_downsampled_images",
+    "extract_sam_masks",
+    "extract_sam_features",
+    "train_saga_features",
+    "compute_scales",
+    "open_saga_gui",
+    "open_bbox_viewer",
+    "open_saga_notebook",
+    "query_by_text",
+    "get_3d_bbox_from_mask",
+    "export_bboxes",
+    "run_saga_pipeline",
+    "load_saga_config",
 ]

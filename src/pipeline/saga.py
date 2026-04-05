@@ -150,7 +150,7 @@ def extract_sam_features(saga_cfg: dict) -> bool:
         str(script),
         "--image_root", str(image_root),
     ]
-    print(f"\n[SAGA Step 1] 提取 CLIP 特征（从 SAM mask）...")
+    print(f"\n[SAGA 9.6.2] 提取 CLIP 语义特征（从 SAM mask）...")
     print(f"   图像目录：{image_root / 'images'}")
     print(f"   输出目录：{clip_features_dir}")
     return _run_saga_script(cmd, SAGA_DIR)
@@ -197,7 +197,7 @@ def create_downsampled_images(saga_cfg: dict) -> bool:
         print("✗ Pillow 未安装（pip install Pillow）")
         return False
 
-    print(f"\n[SAGA Step 2 前置] 创建 ×{downsample} 缩小图像目录...")
+    print(f"\n[SAGA 9.6.1 前置] 创建 ×{downsample} 缩小图像目录...")
     for p in imgs:
         img = PilImage.open(p)
         w, h = img.width // downsample, img.height // downsample
@@ -246,7 +246,7 @@ def extract_sam_masks(saga_cfg: dict) -> bool:
         "--sam_arch", saga_cfg.get("sam_arch", "vit_h"),
         "--downsample", str(downsample),
     ]
-    print(f"\n[SAGA Step 3] 提取 SAM 自动分割 mask...")
+    print(f"\n[SAGA 9.6.1] 提取 SAM 自动分割 mask...")
     print(f"   图像目录：{image_root / f'images_{downsample}'}")
     print(f"   输出目录：{masks_dir}")
     return _run_saga_script(cmd, SAGA_DIR)
@@ -293,7 +293,7 @@ def train_saga_features(saga_cfg: dict) -> bool:
         "--feature_dim", "32",           # cfg_args 无此字段，必须显式传入
         "--allow_principle_point_shift", # cfg_args 无此字段，SAGA Scene 初始化需要
     ]
-    print(f"\n[SAGA Step 4] 训练对比特征...")
+    print(f"\n[SAGA 9.6.4] 训练对比特征...")
     print(f"   模型路径：{model_path}")
     print(f"   场景数据：{image_root}")
     print(f"   预计时间：10~40 分钟")
@@ -324,10 +324,11 @@ def compute_scales(saga_cfg: dict) -> bool:
         sys.executable,
         str(script),
         "-m", str(model_path),
+        "-s", str(image_root),   # 覆盖 cfg_args 中的 source_path（支持本地路径）
         "--image_root", str(image_root),
         "--iteration", "-1",
     ]
-    print(f"\n[SAGA Step 5] 估算 mask 3D 尺度...")
+    print(f"\n[SAGA 9.6.3] 估算 mask 3D 物理尺度...")
     return _run_saga_script(cmd, SAGA_DIR)
 
 
@@ -335,11 +336,117 @@ def compute_scales(saga_cfg: dict) -> bool:
 # Step 6: 启动 SAGA 交互 Notebook
 # ──────────────────────────────────────────────────────────────
 
+def open_saga_gui(saga_cfg: dict, gpu: int = 0) -> None:
+    """
+    Step 6A：启动 SAGA 交互式 GUI（saga_gui.py）。
+
+    操作方式：
+      - 左键拖动：旋转视角
+      - 右键点击物体：放置分割点（需先勾选 clickmode）
+      - segment3d：执行 3D 分割
+      - save as：保存分割结果到 segmentation_res/<name>.pt
+    """
+    gui_script = SAGA_DIR / "saga_gui.py"
+    if not gui_script.exists():
+        print(f"✗ 未找到 saga_gui.py：{gui_script}")
+        return
+
+    model_path = _get_model_path(saga_cfg)
+    if not model_path:
+        return
+
+    # 自动检测 contrastive feature 的 iteration
+    feat_iters = sorted(
+        (p.parent for p in model_path.glob("point_cloud/*/contrastive_feature_point_cloud.ply")),
+        key=lambda p: int(p.name.replace("iteration_", ""))
+    )
+    scene_iters = sorted(
+        (p.parent for p in model_path.glob("point_cloud/*/point_cloud.ply")),
+        key=lambda p: int(p.name.replace("iteration_", ""))
+    )
+    f_iter = int(feat_iters[-1].name.replace("iteration_", "")) if feat_iters else 10000
+    s_iter = int(scene_iters[-1].name.replace("iteration_", "")) if scene_iters else 5000
+
+    import os
+    env = os.environ.copy()
+    env["CUDA_VISIBLE_DEVICES"] = str(gpu)
+
+    print(f"\n[SAGA GUI] 启动交互式分割界面...")
+    print(f"   模型：{model_path}")
+    print(f"   场景 iter：{s_iter}，特征 iter：{f_iter}，GPU：{gpu}")
+    print(f"   操作：勾选 clickmode → 右键点击物体 → segment3d → save as")
+
+    subprocess.Popen(
+        [sys.executable, str(gui_script),
+         "--model_path", str(model_path),
+         "-f", str(f_iter),
+         "-s", str(s_iter)],
+        cwd=str(SAGA_DIR),
+        env=env,
+    )
+    print("✓ GUI 已启动，等待窗口弹出（约 10-20 秒）")
+
+
+def open_bbox_viewer(
+    bboxes: "dict | list",
+    saga_cfg: dict,
+    gpu: int = 1,
+) -> None:
+    """
+    启动 3D BBox 可交互查看器（bbox_viewer.py）。
+
+    在高斯泼溅真实感渲染上叠加 3D 识别框 + 标签，支持旋转/平移/缩放。
+    saga_gui.py 独立运行，互不影响。
+
+    Args:
+        bboxes:    query_by_text() 返回的 dict，或多个 bbox 的 list
+        saga_cfg:  SAGA 配置字典
+        gpu:       GPU 编号（默认 1 = RTX 2080 Ti）
+    """
+    import json, tempfile
+
+    viewer_script = SAGA_DIR / "bbox_viewer.py"
+    if not viewer_script.exists():
+        print(f"✗ 未找到 bbox_viewer.py：{viewer_script}")
+        return
+
+    model_path = _get_model_path(saga_cfg)
+    if not model_path:
+        return
+
+    # 支持单个 dict 或 list
+    bbox_list = bboxes if isinstance(bboxes, list) else [bboxes]
+
+    # 写临时 JSON
+    tmp = tempfile.NamedTemporaryFile(suffix=".json", delete=False, mode="w")
+    json.dump(bbox_list, tmp)
+    tmp.close()
+
+    import os
+    env = os.environ.copy()
+    env["CUDA_VISIBLE_DEVICES"] = str(gpu)
+
+    labels = [b["label"] for b in bbox_list]
+    print(f"\n[BBox Viewer] 启动 3D 识别框查看器...")
+    print(f"   模型：{model_path}")
+    print(f"   识别物体：{labels}，GPU：{gpu}")
+    print(f"   操作：左键旋转 / 右键平移 / 滚轮缩放")
+
+    subprocess.Popen(
+        [sys.executable, str(viewer_script),
+         "-m", str(model_path),
+         "--bbox_json", tmp.name],
+        cwd=str(SAGA_DIR),
+        env=env,
+    )
+    print("✓ 查看器已启动，等待窗口弹出（约 10-20 秒）")
+
+
 def open_saga_notebook(saga_cfg: dict) -> None:
     """
-    Step 6：在 SAGA 目录下启动 prompt_segmenting.ipynb。
+    Step 6B：在 SAGA 目录下启动 prompt_segmenting.ipynb（文字查询）。
 
-    支持：文字 CLIP 查询、点击 prompt、框选 prompt → 输出 3D Bounding Box
+    支持：文字 CLIP 查询（输入 "mouse" 自动识别）→ 输出 3D Bounding Box
     """
     nb = SAGA_DIR / "prompt_segmenting.ipynb"
     if not nb.exists():
@@ -350,19 +457,431 @@ def open_saga_notebook(saga_cfg: dict) -> None:
     model_path = _get_model_path(saga_cfg)
     image_root, _ = _get_paths(saga_cfg)
 
-    print("\n[SAGA Step 6] 启动交互分割 Notebook")
+    print("\n[SAGA Step 6B] 启动文字查询 Notebook")
     print(f"   Notebook：{nb}")
     print(f"   打开后修改 notebook 顶部变量：")
     print(f"     model_path = \"{model_path}\"")
     print(f"     image_root = \"{image_root}\"")
     print()
 
-    # 在 SAGA 目录下启动（SAGA 使用相对路径）
     subprocess.Popen(
-        ["jupyter", "notebook", str(nb)],
-        cwd=SAGA_DIR,
+        ["jupyter", "lab", "--no-browser", "--port=8888"],
+        cwd=str(SAGA_DIR),
     )
-    print("✓ Jupyter 已在后台启动，请在浏览器中打开 prompt_segmenting.ipynb")
+    print("✓ JupyterLab 已启动，复制终端链接到浏览器，打开 prompt_segmenting.ipynb")
+
+
+# ──────────────────────────────────────────────────────────────
+# Step 7: 文字查询 → 自动 3D Bounding Box（无需手动开 Notebook）
+# ──────────────────────────────────────────────────────────────
+
+def query_by_text(
+    text: str,
+    saga_cfg: dict,
+    save_name: str | None = None,
+    gpu: int = 0,
+    score_threshold: float = 0.0,
+) -> "dict | None":
+    """
+    用文字查询在 3D 高斯场景中定位物体，输出 3D bounding box。
+
+    原理：加载已训练的 SAGA 对比特征模型，对每张训练相机渲染特征图并
+    收集 CLIP 图像特征（clip_features），再用 CLIP 文字编码计算相似度，
+    找到最相关的 Gaussian 集合，最终输出 3D AABB bbox。
+
+    Args:
+        text:             查询文字，如 "mouse", "bottle", "yogurt"
+        saga_cfg:         SAGA 配置字典（含 model_path, image_root 等）
+        save_name:        mask 保存文件名（不含 .pt），默认用 text
+        gpu:              使用的 GPU 编号
+        score_threshold:  相似度阈值，0.0-1.0（0 = 自动用最优 cluster）
+
+    Returns:
+        bbox dict: {"label": text, "center": [...], "size": [...],
+                    "bbox_min": [...], "bbox_max": [...], "n_gaussians": N}
+        None if failed
+    """
+    import os
+
+    # ── 0. CUDA device 必须在 import torch 之前设置 ──────────────
+    os.environ["CUDA_VISIBLE_DEVICES"] = str(gpu)
+
+    # ── 1. 解析路径 ───────────────────────────────────────────────
+    image_root, _ = _get_paths(saga_cfg)
+    model_path = _get_model_path(saga_cfg)
+    if model_path is None:
+        return None
+
+    # 检查必要的前置输出目录
+    clip_feat_dir = image_root / "clip_features"
+    if not clip_feat_dir.exists():
+        print(f"✗ clip_features/ 目录不存在：{clip_feat_dir}")
+        print("  请先运行 extract_sam_features(saga_cfg)")
+        return None
+
+    # ── 2. 切换工作目录并注入 SAGA 到 sys.path ───────────────────
+    import sys
+    original_cwd = os.getcwd()
+    original_path = sys.path[:]
+    try:
+        os.chdir(str(SAGA_DIR))
+        if str(SAGA_DIR) not in sys.path:
+            sys.path.insert(0, str(SAGA_DIR))
+
+        return _query_by_text_inner(
+            text=text,
+            model_path=model_path,
+            image_root=image_root,
+            save_name=save_name or text.replace(" ", "_"),
+            score_threshold=score_threshold,
+        )
+    finally:
+        os.chdir(original_cwd)
+        sys.path[:] = original_path
+
+
+def _query_by_text_inner(
+    text: str,
+    model_path: "Path",
+    image_root: "Path",
+    save_name: str,
+    score_threshold: float,
+) -> "dict | None":
+    """
+    实际执行文字查询的内部函数（已在 SAGA_DIR 下运行，sys.path 已注入）。
+    对应 prompt_segmenting.ipynb Cell 1~54 的完整逻辑。
+    """
+    import os
+    import torch
+    import numpy as np
+    from copy import deepcopy
+    from argparse import ArgumentParser, Namespace
+
+    # SAGA 模块（需要在 SAGA_DIR 下才能正确导入）
+    from arguments import ModelParams, PipelineParams
+    from scene import Scene, GaussianModel, FeatureGaussianModel
+    from gaussian_renderer import render_contrastive_feature
+    from sklearn.preprocessing import QuantileTransformer
+    import hdbscan as hdbscan_module
+
+    FEATURE_DIM = 32
+
+    # ── A. 找到 contrastive feature 的 iteration ─────────────────
+    feat_plys = sorted(
+        model_path.glob("point_cloud/iteration_*/contrastive_feature_point_cloud.ply"),
+        key=lambda p: int(p.parent.name.replace("iteration_", ""))
+    )
+    if not feat_plys:
+        print(f"✗ 未找到 contrastive_feature_point_cloud.ply，请先运行 train_saga_features()")
+        return None
+    feat_iter = int(feat_plys[-1].parent.name.replace("iteration_", ""))
+    print(f"   使用 contrastive feature iter={feat_iter}")
+
+    scale_gate_path = str(model_path / f"point_cloud/iteration_{feat_iter}/scale_gate.pt")
+
+    # ── B. 加载 scale_gate ────────────────────────────────────────
+    scale_gate = torch.nn.Sequential(
+        torch.nn.Linear(1, 32, bias=True),
+        torch.nn.Sigmoid()
+    )
+    scale_gate.load_state_dict(torch.load(scale_gate_path, map_location="cpu"))
+    scale_gate = scale_gate.cuda()
+
+    # ── C. 解析场景配置，加载 GaussianModel ──────────────────────
+    def get_combined_args(parser: ArgumentParser, mp: str, sp: str = None) -> Namespace:
+        cmdlne_string = ["--model_path", mp]
+        if sp:
+            cmdlne_string += ["--source_path", sp]
+        args_cmdline = parser.parse_args(cmdlne_string)
+        cfgfilepath = os.path.join(mp, "cfg_args")
+        cfgfile_string = "Namespace()"
+        try:
+            with open(cfgfilepath) as f:
+                cfgfile_string = f.read()
+        except (TypeError, FileNotFoundError):
+            pass
+        args_cfgfile = eval(cfgfile_string)
+        merged = vars(args_cfgfile).copy()
+        for k, v in vars(args_cmdline).items():
+            if v is not None:
+                merged[k] = v
+        return Namespace(**merged)
+
+    parser = ArgumentParser(description="query_by_text")
+    model_params = ModelParams(parser, sentinel=True)
+    pipeline_params = PipelineParams(parser)
+    parser.add_argument("--target", default="scene", type=str)
+
+    args = get_combined_args(parser, str(model_path), str(image_root))
+
+    dataset = model_params.extract(args)
+    dataset.need_features = True   # 加载 clip_features/
+    dataset.need_masks = True
+    dataset.allow_principle_point_shift = False
+
+    scene_gaussians = GaussianModel(dataset.sh_degree)
+    feature_gaussians = FeatureGaussianModel(FEATURE_DIM)
+
+    scene = Scene(
+        dataset, scene_gaussians, feature_gaussians,
+        load_iteration=-1,
+        feature_load_iteration=feat_iter,
+        shuffle=False,
+        mode="eval",
+        target="contrastive_feature",
+    )
+
+    # ── D. 构建 quantile transformer（基于全部 mask scale）────────
+    all_scales = []
+    for cam in scene.getTrainCameras():
+        all_scales.append(cam.mask_scales)
+    all_scales = torch.cat(all_scales)
+
+    qt = QuantileTransformer(output_distribution="uniform")
+    qt.fit(all_scales.detach().cpu().numpy().reshape(-1, 1))
+
+    def q_trans(s: torch.Tensor) -> torch.Tensor:
+        shape = s.shape
+        return torch.tensor(
+            qt.transform(s.detach().cpu().numpy().reshape(-1, 1)),
+            dtype=torch.float32,
+        ).to(s.device).reshape(shape)
+
+    # ── E. 采集 anchor point features（稀疏采样）────────────────
+    all_point_features = feature_gaussians.get_point_features  # (N, FEATURE_DIM)
+    anchor_mask = torch.rand(all_point_features.shape[0]) > 0.99
+    anchor_point_features = all_point_features[anchor_mask]
+    print(f"   anchor points: {len(anchor_point_features)}")
+
+    # ── F. 遍历所有训练相机，收集 clip_features 和 seg_features ──
+    bg_color = [0.0] * FEATURE_DIM
+    background = torch.tensor(bg_color, dtype=torch.float32, device="cuda")
+
+    seg_features = []
+    clip_features = []
+    scales = []
+    mask_identifiers = []
+    camera_id_mask_id = []
+
+    cameras = scene.getTrainCameras()
+    print(f"   训练相机数：{len(cameras)}，开始收集 CLIP 特征...")
+
+    for cam_i, view in enumerate(cameras):
+        torch.cuda.empty_cache()
+        clip_features.append(view.original_features)
+
+        tmp_view = deepcopy(view)
+        tmp_view.feature_height = view.original_image.shape[-2]
+        tmp_view.feature_width = view.original_image.shape[-1]
+
+        rendered_feature = render_contrastive_feature(
+            tmp_view, feature_gaussians,
+            pipeline_params.extract(args), background,
+            norm_point_features=True,
+        )["render"]
+        feature_h, feature_w = rendered_feature.shape[-2:]
+
+        with torch.no_grad():
+            # 降采样到 1/4 分辨率（与 notebook 保持一致）
+            rf_small = torch.nn.functional.interpolate(
+                rendered_feature.unsqueeze(0),
+                (feature_h // 4, feature_w // 4),
+                mode="bilinear",
+            ).squeeze()
+
+            sam_masks = view.original_masks.cuda().unsqueeze(1)
+            sam_masks = torch.nn.functional.interpolate(
+                sam_masks.float(), (feature_h // 4, feature_w // 4), mode="bilinear"
+            )
+            # 腐蚀：convolution-based erosion，kernel 3×3，threshold=2
+            sam_masks = torch.conv2d(
+                sam_masks.float().cpu(),
+                torch.full((3, 3), 1.0).view(1, 1, 3, 3).cpu(),
+                padding=1,
+            )
+            sam_masks = (sam_masks >= 2).cuda()
+
+            mask_scales = view.mask_scales.cuda().unsqueeze(-1)
+            mask_scales_q = q_trans(mask_scales)
+            scale_gates = scale_gate(mask_scales_q)
+
+            # scale-conditioned anchor features: (N_scale, N_anchor, C)
+            sca_feat = scale_gates.unsqueeze(1) * anchor_point_features.unsqueeze(0)
+            sca_feat = torch.nn.functional.normalize(sca_feat, dim=-1, p=2)
+
+            # scale-conditioned rendered features: (N_scale, C, H, W)
+            sc_render = rf_small.unsqueeze(0) * scale_gates.unsqueeze(-1).unsqueeze(-1)
+            sc_render = torch.nn.functional.normalize(sc_render, dim=1, p=2)
+
+            # mask-pooled features: (N_mask, C)
+            mask_feat = (
+                (sam_masks * sc_render).sum(dim=-1).sum(dim=-1)
+                / (sam_masks.sum(dim=-1).sum(dim=-1) + 1e-9)
+            )
+            mask_feat = torch.nn.functional.normalize(mask_feat, dim=-1, p=2)
+
+            mask_id = torch.einsum("nmc,nc->nm", sca_feat, mask_feat) > 0.5
+
+            mask_identifiers.append(mask_id.cpu())
+            seg_features.append(mask_feat)
+            scales.append(view.mask_scales.cuda().unsqueeze(-1))
+
+            for j in range(len(mask_feat)):
+                camera_id_mask_id.append((cam_i, j))
+
+    torch.cuda.empty_cache()
+
+    flattened_mask_features = torch.cat(seg_features, dim=0)
+    flattened_clip_features = torch.cat(clip_features, dim=0)
+    flattened_clip_features = torch.nn.functional.normalize(
+        flattened_clip_features.float(), dim=-1, p=2
+    )
+    flattened_scales = torch.cat(scales, dim=0)
+    flattened_mask_identifiers = torch.cat(mask_identifiers, dim=0).to(torch.float16).cuda()
+
+    print(f"   累计 mask 数：{flattened_mask_features.shape[0]}")
+
+    # ── G. 用 mask_identifiers 构建 Jaccard 距离矩阵，做聚类 ─────
+    with torch.no_grad():
+        intersection = torch.einsum(
+            "mc,nc->mn", flattened_mask_identifiers, flattened_mask_identifiers
+        )
+        union = (
+            flattened_mask_identifiers.sum(dim=-1).unsqueeze(-1)
+            + flattened_mask_identifiers.sum(dim=-1).unsqueeze(0)
+            - intersection
+            + 1e-6
+        )
+        distance_map = (1 - intersection / union).detach().cpu().numpy().astype(np.float64)
+
+    clusterer = hdbscan_module.HDBSCAN(
+        min_cluster_size=30, cluster_selection_epsilon=0.25, metric="precomputed"
+    )
+    cluster_labels = clusterer.fit_predict(distance_map)
+    cluster_labels = torch.from_numpy(cluster_labels).to(
+        device=flattened_clip_features.device, dtype=torch.long
+    )
+
+    # ── H. 用 CLIP 文字编码对每个 cluster 打分 ───────────────────
+    from clip_utils import get_scores_with_template
+    from clip_utils.clip_utils import load_clip
+
+    clip_model = load_clip()
+    clip_model.eval()
+
+    scores = get_scores_with_template(
+        clip_model, flattened_clip_features.cuda(), text
+    ).squeeze()
+
+    # 每个 cluster 取均值分数（cluster_labels 从 -1 开始，-1 = noise）
+    unique_clusters = cluster_labels.unique()
+    cluster_scores = torch.zeros(len(unique_clusters), device=cluster_labels.device)
+    for idx, cid in enumerate(unique_clusters):
+        cluster_scores[idx] = scores[cluster_labels == cid].mean()
+
+    # ── I. 选取好 cluster，得到对应的 mask features + scale ──────
+    SCORE_THRESH = score_threshold if score_threshold > 0.0 else 0.45
+    good_mask = cluster_scores > SCORE_THRESH
+    good_indices = torch.where(good_mask)[0]
+    if len(good_indices) == 0:
+        # 退化：选最高分 cluster
+        good_indices = torch.tensor([cluster_scores.argmax()])
+
+    good_clusters = [unique_clusters[i] for i in good_indices]
+
+    clip_query_features = []
+    corresponding_scales = []
+    for g in good_clusters:
+        in_cluster = cluster_labels == g
+        cluster_mask_scores = scores[in_cluster]
+        best_idx = cluster_mask_scores.argmax()
+        feat = torch.nn.functional.normalize(
+            flattened_mask_features[in_cluster][best_idx], dim=-1, p=2
+        )
+        clip_query_features.append(feat)
+        corresponding_scales.append(flattened_scales[in_cluster][best_idx].item())
+
+    # ── J. 计算每个 Gaussian 与 query feature 的相似度 ───────────
+    point_features = feature_gaussians.get_point_features  # (N, FEATURE_DIM)
+
+    final_similarities = torch.zeros(point_features.shape[0], device="cuda")
+    for feat, scale_val in zip(clip_query_features, corresponding_scales):
+        scale_t = torch.full((1,), scale_val).cuda()
+        scale_t = q_trans(scale_t)
+        gates = scale_gate(scale_t).detach().squeeze()
+
+        sc_pt = point_features * gates.unsqueeze(0)
+        sc_pt_normed = torch.nn.functional.normalize(sc_pt, dim=-1, p=2)
+        sims = torch.einsum("C,NC->N", feat.cuda(), sc_pt_normed)
+        # 取多个 cluster 中的最大相似度
+        final_similarities = torch.maximum(final_similarities, sims)
+
+    # ── K. 生成 mask 并保存 ───────────────────────────────────────
+    # 自动选阈值：若用户未指定有效阈值，用 0.85（notebook 默认值）
+    threshold = score_threshold if score_threshold > 0.0 else 0.85
+    final_mask = final_similarities > threshold
+
+    seg_dir = model_path / "segmentation_res"
+    seg_dir.mkdir(exist_ok=True)
+    mask_save_path = seg_dir / f"{save_name}.pt"
+    torch.save(final_mask, str(mask_save_path))
+    print(f"✓ mask 已保存 → {mask_save_path}  (选中 Gaussian 数：{final_mask.sum().item()})")
+
+    # ── L. 调用 get_3d_bbox_from_mask 返回 bbox ───────────────────
+    # 找最新 scene point_cloud.ply
+    scene_plys = sorted(
+        model_path.glob("point_cloud/iteration_*/point_cloud.ply"),
+        key=lambda p: int(p.parent.name.replace("iteration_", ""))
+    )
+    if not scene_plys:
+        print(f"✗ 未找到 point_cloud.ply：{model_path}")
+        return None
+    ply_path = scene_plys[-1]
+
+    try:
+        from plyfile import PlyData
+    except ImportError:
+        print("✗ 缺少 plyfile（pip install plyfile）")
+        return None
+
+    ply = PlyData.read(str(ply_path))
+    verts = ply["vertex"]
+    xyz = np.stack([verts["x"], verts["y"], verts["z"]], axis=1)  # (N, 3)
+
+    mask_np = final_mask.detach().cpu().numpy().flatten().astype(bool)
+    if len(mask_np) != len(xyz):
+        print(f"✗ mask 长度 {len(mask_np)} ≠ 点云 Gaussian 数 {len(xyz)}")
+        return None
+
+    selected = xyz[mask_np]
+    if len(selected) == 0:
+        print(f"✗ 阈值 {threshold:.2f} 下没有选中任何 Gaussian，请尝试降低 score_threshold")
+        return None
+
+    padding = 0.05
+    bbox_min = selected.min(axis=0)
+    bbox_max = selected.max(axis=0)
+    center = (bbox_min + bbox_max) / 2
+    size = bbox_max - bbox_min
+    p = 1 + padding
+
+    result = {
+        "label":      text,
+        "center":     center.tolist(),
+        "size":       (size * p).tolist(),
+        "bbox_min":   (center - size / 2 * p).tolist(),
+        "bbox_max":   (center + size / 2 * p).tolist(),
+        "n_gaussians": int(mask_np.sum()),
+        "mask_path":  str(mask_save_path),
+    }
+
+    print(f"\n✅ 3D Bounding Box — {text}")
+    print(f"   中心坐标 : [{', '.join(f'{v:.4f}' for v in result['center'])}]  （单位：米）")
+    print(f"   尺寸 XYZ : [{', '.join(f'{v:.4f}' for v in result['size'])}]")
+    print(f"   包含 Gaussian 数 : {result['n_gaussians']:,}")
+    logger.info(f"query_by_text [{text}]: center={result['center']}, size={result['size']}")
+
+    return result
 
 
 # ──────────────────────────────────────────────────────────────
@@ -597,9 +1116,12 @@ def _check_images_dir(image_root: Path) -> bool:
 
 def _run_saga_script(cmd: list[str], cwd: Path) -> bool:
     """在 SAGA 目录下运行脚本，实时打印输出。"""
+    import os
+    env = os.environ.copy()
+    env["PYTORCH_CUDA_ALLOC_CONF"] = "max_split_size_mb:512"
     print(f"   命令：{' '.join(cmd[:3])} ...")
     proc = subprocess.Popen(
-        cmd, cwd=cwd,
+        cmd, cwd=cwd, env=env,
         stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
         text=True, bufsize=1,
     )
