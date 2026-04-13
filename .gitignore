@@ -7,17 +7,34 @@ __pycache__/
 *.ckpt
 *.onnx
 
+# Third-party modules (submodules, not for upstream merge)
+third_party/gaussian-splatting/
+
 # Dataset and generated artifacts
+data/*
 data/raw/*
+data/nerf_synthetic/*
+data/official/*
 data/processed/*
+data/nerf_synthetic/*
 !data/raw/.gitkeep
 !data/processed/.gitkeep
+
+# docker
+docker/*
 
 # Model weights and logs
 weights/*
 !weights/.gitkeep
 logs/
+outputs/
 
 # Python cache
 *.pyc
 .ipynb_checkpoints/
+.venv/
+
+tests/
+
+pre_script.md
+pre_script.pdf
