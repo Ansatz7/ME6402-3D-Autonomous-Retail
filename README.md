@@ -136,14 +136,23 @@ cd ME6402-3D-Autonomous-Retail
 
 **Step 2 — Extract the data archive**
 
-Unzip the accompanying archive into the project root. It contains experiment data and trained models (third-party source repos are **not** included — they are cloned by the setup scripts in Step 3–4):
+Place `ME6402_data.tar.gz` in the project root, then extract:
+
+```bash
+cd ME6402-3D-Autonomous-Retail
+tar xzf ME6402_data.tar.gz
+```
+
+The archive unpacks directly into the project root and provides:
 
 ```
 dependencies/sam_ckpt/sam_vit_h_4b8939.pth       ← SAM weights (~2.5 GB)
 data/colmap_workspace/custom_scene_01/             ← scene images + COLMAP output + CLIP features
 outputs/3dgs_custom_scene_01_5000iter/             ← trained 3DGS model (ready for SAGA)
-outputs/3dgs_team_data2_30000iter/                 ← (optional) high-quality model
+outputs/3dgs_team_data2_30000iter/                 ← high-quality model for SAGA demo
 ```
+
+> Third-party source repos (`gaussian-splatting`, `SAGA`) are **not** in this archive — they are cloned by the setup scripts in Step 3–4.
 
 **Step 3 — Set up the 3DGS Conda environment**
 ```bash
@@ -424,14 +433,23 @@ cd ME6402-3D-Autonomous-Retail
 
 **Step 2 — 解压实验数据压缩包**
 
-将附带压缩包解压到项目根目录（第三方源码不在压缩包中，由 Step 3–4 脚本自动克隆）：
+将 `ME6402_data.tar.gz` 放到项目根目录，然后执行：
+
+```bash
+cd ME6402-3D-Autonomous-Retail
+tar xzf ME6402_data.tar.gz
+```
+
+压缩包会直接解压到项目根目录，包含以下内容：
 
 ```
 dependencies/sam_ckpt/sam_vit_h_4b8939.pth       ← SAM 权重（~2.5 GB）
 data/colmap_workspace/custom_scene_01/             ← 场景图像 + COLMAP 输出 + CLIP 特征
 outputs/3dgs_custom_scene_01_5000iter/             ← 已训练的 3DGS 模型（可直接用于 SAGA）
-outputs/3dgs_team_data2_30000iter/                 ← 可选，高质量对比模型
+outputs/3dgs_team_data2_30000iter/                 ← 高质量模型，用于 SAGA 效果演示
 ```
+
+> 第三方源码仓库（`gaussian-splatting`、`SAGA`）**不在**压缩包中，由 Step 3–4 的脚本自动克隆。
 
 **Step 3 — 创建 3DGS Conda 环境**
 ```bash
