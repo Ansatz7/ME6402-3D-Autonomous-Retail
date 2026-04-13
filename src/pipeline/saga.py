@@ -157,6 +157,110 @@ def extract_sam_features(saga_cfg: dict) -> bool:
 
 
 # ──────────────────────────────────────────────────────────────
+# CLIP 特征质量验证（可选）
+# ──────────────────────────────────────────────────────────────
+
+def validate_clip_features(saga_cfg: dict, queries: list[str] | None = None) -> None:
+    """
+    验证 CLIP 特征提取结果是否有效。
+
+    做三件事：
+      1. 统计 clip_features/*.pt 文件数量和每文件特征维度
+      2. 对一批查询词，计算与所有 mask 特征的余弦相似度，打印 top-5 分数
+      3. 打印分数分布直方图（用 ASCII 显示）
+
+    使用示例（Notebook 中）：
+        validate_clip_features(saga_cfg, queries=["mouse", "bottle", "shelf"])
+    """
+    import os
+    import torch
+    import numpy as np
+
+    image_root, _ = _get_paths(saga_cfg)
+    clip_feat_dir = image_root / "clip_features"
+
+    if not clip_feat_dir.exists():
+        print("✗ clip_features/ 不存在，请先运行 extract_sam_features(saga_cfg)")
+        return
+
+    pt_files = sorted(clip_feat_dir.glob("*.pt"))
+    if not pt_files:
+        print("✗ clip_features/ 为空，请先运行 extract_sam_features(saga_cfg)")
+        return
+
+    # ── 1. 文件统计 ───────────────────────────────────────────────
+    print("=" * 55)
+    print("CLIP 特征文件统计")
+    print("=" * 55)
+    print(f"  文件数：{len(pt_files)}")
+
+    sample = torch.load(pt_files[0], map_location="cpu")
+    print(f"  特征维度：{sample.shape}  (N_mask × 512)")
+    print(f"  示例文件：{pt_files[0].name}")
+
+    total_masks = 0
+    all_features = []
+    for f in pt_files:
+        feat = torch.load(f, map_location="cpu")
+        total_masks += feat.shape[0]
+        all_features.append(feat)
+    all_features = torch.cat(all_features, dim=0).float()  # (总mask数, 512)
+    print(f"  总 mask 数：{total_masks}")
+
+    # 检查特征是否已归一化
+    norms = all_features.norm(dim=1)
+    print(f"  特征范数均值：{norms.mean():.4f}（≈1.0 表示已归一化）")
+
+    # ── 2. 文字查询相似度 ─────────────────────────────────────────
+    if queries is None:
+        queries = ["mouse", "bottle", "book", "cup", "shelf"]
+
+    # 尝试在 SAGA 目录下导入 open_clip
+    try:
+        os.chdir(str(SAGA_DIR))
+        import sys as _sys
+        if str(SAGA_DIR) not in _sys.path:
+            _sys.path.insert(0, str(SAGA_DIR))
+        from clip_utils.clip_utils import load_clip
+        clip_model = load_clip()
+        clip_model.eval()
+
+        # 归一化图像特征
+        norm_features = torch.nn.functional.normalize(all_features, dim=-1).cuda()
+
+        print()
+        print("=" * 55)
+        print("文字查询相似度验证（top-5 分数）")
+        print("=" * 55)
+        for query in queries:
+            with torch.no_grad():
+                clip_model.set_positives([query])
+                # get_relevancy 返回 (N, 2)，[:,0] 是正类概率
+                scores = clip_model.get_relevancy(norm_features, 0)[:, 0]
+            scores_cpu = scores.cpu().numpy()
+            top5 = np.sort(scores_cpu)[::-1][:5]
+            mean_s = scores_cpu.mean()
+            print(f"  '{query}': top5={[f'{s:.3f}' for s in top5]}  mean={mean_s:.3f}")
+
+            # ASCII 直方图（10 个 bin，范围 0~1）
+            bins = np.zeros(10, dtype=int)
+            for s in scores_cpu:
+                idx = min(int(s * 10), 9)
+                bins[idx] += 1
+            bar = "  分布: |"
+            for b in bins:
+                bar += "#" * min(b // max(1, total_masks // 50), 8) + " "
+            print(bar + f"|  (0→1)")
+        norm_features = norm_features.cpu()
+        torch.cuda.empty_cache()
+    except Exception as e:
+        print(f"\n  (跳过文字查询验证：{e})")
+
+    print()
+    print("✓ 验证完成。分数 top5 越高（越接近1.0）代表 CLIP 特征识别能力越强。")
+
+
+# ──────────────────────────────────────────────────────────────
 # Step 2: 创建缩小版图像目录（mask 提取用）
 # ──────────────────────────────────────────────────────────────
 
@@ -769,8 +873,21 @@ def _query_by_text_inner(
     clip_model = load_clip()
     clip_model.eval()
 
+    # 零售货架专用 prompt 模板，比通用 ImageNet 模板对商品识别更准
+    retail_template = [
+        'a photo of a {}.',
+        'a product photo of a {}.',
+        'a retail shelf item: {}.',
+        'a close-up photo of a {}.',
+        'a {} on a store shelf.',
+        'a {} product.',
+        'a packaged {}.',
+        'a {} for sale.',
+        'a photo of the {}.',
+        'a good photo of a {}.',
+    ]
     scores = get_scores_with_template(
-        clip_model, flattened_clip_features.cuda(), text
+        clip_model, flattened_clip_features.cuda(), text, template=retail_template
     ).squeeze()
 
     # 每个 cluster 取均值分数（cluster_labels 从 -1 开始，-1 = noise）
@@ -1149,3 +1266,292 @@ def _try_import(module: str) -> bool:
         return True
     except ImportError:
         return False
+
+
+def visualize_query_results(*results) -> None:
+    """
+    弹窗显示 query_by_text 返回的 3D 可视化（每个结果一个独立窗口）。
+    用法：visualize_query_results(result1, result2, ...)
+    """
+    import numpy as np
+    import matplotlib.pyplot as plt
+
+    plt.switch_backend("TkAgg")   # 弹出独立窗口；如报错可换 "Qt5Agg"
+
+    try:
+        from plyfile import PlyData
+    except ImportError:
+        print("✗ 请先安装 plyfile：pip install plyfile")
+        return
+
+    # 所有结果共用同一份点云，只读一次
+    if not results:
+        print("没有传入任何查询结果")
+        return
+
+    model_path = Path(results[0]["mask_path"]).parent.parent
+    ply_path = model_path / "point_cloud/iteration_30000/point_cloud.ply"
+    ply = PlyData.read(ply_path)
+    xyz = np.stack([ply["vertex"]["x"], ply["vertex"]["y"], ply["vertex"]["z"]], axis=1)
+    step = max(1, len(xyz) // 8000)
+    bg_xyz = xyz[::step]
+
+    colors = ["red", "limegreen", "dodgerblue", "orange"]
+
+    for idx, result in enumerate(results):
+        import torch
+        mask = torch.load(result["mask_path"]).cpu().numpy().astype(bool)
+        selected = xyz[mask]
+
+        fig = plt.figure(figsize=(11, 8))
+        ax = fig.add_subplot(111, projection="3d")
+
+        ax.scatter(bg_xyz[:, 0], bg_xyz[:, 1], bg_xyz[:, 2],
+                   c="lightgray", s=0.3, alpha=0.2)
+        ax.scatter(selected[:, 0], selected[:, 1], selected[:, 2],
+                   c=colors[idx % len(colors)], s=8, alpha=0.9,
+                   label=f"{result['label']} ({result['n_gaussians']})")
+
+        mn, mx = result["bbox_min"], result["bbox_max"]
+        corners = [
+            [mn[0],mn[1],mn[2]], [mx[0],mn[1],mn[2]], [mx[0],mx[1],mn[2]], [mn[0],mx[1],mn[2]],
+            [mn[0],mn[1],mx[2]], [mx[0],mn[1],mx[2]], [mx[0],mx[1],mx[2]], [mn[0],mx[1],mx[2]],
+        ]
+        for i, j in [(0,1),(1,2),(2,3),(3,0),(4,5),(5,6),(6,7),(7,4),(0,4),(1,5),(2,6),(3,7)]:
+            ax.plot([corners[i][0], corners[j][0]],
+                    [corners[i][1], corners[j][1]],
+                    [corners[i][2], corners[j][2]], "b-", linewidth=1.2, alpha=0.7)
+
+        ax.set_xlabel("X"); ax.set_ylabel("Y"); ax.set_zlabel("Z")
+        ax.set_title("Query: " + result["label"])
+        ax.legend()
+        plt.tight_layout()
+
+    plt.show()  # 一次性显示所有窗口，可同时拖动旋转
+
+
+def validate_3d_fusion(
+    mask_label: str,
+    saga_cfg: dict,
+    n_views: int = 6,
+) -> None:
+    """
+    验证 3D 语义融合质量：把 query_by_text 选中的 3D Gaussians
+    投影回原始图像，目视检查落点是否与真实物体位置吻合。
+
+    用法：
+        validate_3d_fusion("coca_cola_can", saga_cfg)
+        validate_3d_fusion("facial_tissue_box", saga_cfg, n_views=4)
+
+    参数：
+        mask_label : segmentation_res/ 下的文件名（不含 .pt）
+        saga_cfg   : pipeline.yaml 中的 saga 节
+        n_views    : 随机抽取几个相机视角显示（默认 6）
+    """
+    import json
+    import random
+    import cv2
+    import torch
+    import numpy as np
+    import matplotlib.pyplot as plt
+    from plyfile import PlyData
+
+    plt.switch_backend("TkAgg")
+
+    model_path = _get_model_path(saga_cfg)
+    if model_path is None:
+        return
+    image_root, _ = _get_paths(saga_cfg)
+
+    mask_pt = model_path / "segmentation_res" / (mask_label + ".pt")
+    if not mask_pt.exists():
+        print(f"✗ 找不到 {mask_pt}，先运行 query_by_text()")
+        return
+
+    # 读取 Gaussian 位置
+    ply_path = model_path / "point_cloud/iteration_30000/point_cloud.ply"
+    ply = PlyData.read(ply_path)
+    xyz = np.stack([ply["vertex"]["x"], ply["vertex"]["y"], ply["vertex"]["z"]], axis=1)
+
+    # 读取 3D mask
+    mask = torch.load(mask_pt, map_location="cpu").numpy().astype(bool)
+    selected_xyz = xyz[mask]           # (N_selected, 3)
+    print(f"   '{mask_label}'：选中 {mask.sum()} 个 Gaussians，投影到 {n_views} 个视角")
+
+    # 读取相机参数（cameras.json 是 3DGS 导出的，rotation = camera→world）
+    with open(model_path / "cameras.json") as f:
+        cameras = json.load(f)
+
+    # 随机采样 n_views 个相机
+    sampled = random.sample(cameras, min(n_views, len(cameras)))
+
+    ncols = 3
+    nrows = (len(sampled) + ncols - 1) // ncols
+    fig, axes = plt.subplots(nrows, ncols, figsize=(6 * ncols, 4 * nrows))
+    axes = np.array(axes).flatten()
+
+    for ax_i, cam in enumerate(sampled):
+        img_name = cam["img_name"]
+        img_path = image_root / "images" / img_name
+        if not img_path.exists():
+            axes[ax_i].axis("off")
+            continue
+
+        img = cv2.imread(str(img_path))
+        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+        H, W = img.shape[:2]
+
+        # 相机内参
+        fx, fy = cam["fx"], cam["fy"]
+        cx, cy = W / 2.0, H / 2.0
+
+        # 外参：cameras.json 中 rotation 是 camera→world，position 是相机中心（world）
+        R = np.array(cam["rotation"])   # (3, 3)  camera→world
+        t = np.array(cam["position"])   # (3,)    world position
+
+        # world → camera
+        R_cw = R.T                           # (3, 3)
+        p_cam = (selected_xyz - t) @ R_cw.T  # (N, 3)
+
+        # 过滤掉在相机后方的点
+        in_front = p_cam[:, 2] > 0.01
+        p_cam = p_cam[in_front]
+
+        # 投影到像素
+        u = fx * p_cam[:, 0] / p_cam[:, 2] + cx
+        v = fy * p_cam[:, 1] / p_cam[:, 2] + cy
+
+        # 过滤出图像范围外的点
+        in_frame = (u >= 0) & (u < W) & (v >= 0) & (v < H)
+        u, v = u[in_frame], v[in_frame]
+
+        # 显示：降采样大图避免卡顿
+        scale = min(1.0, 800 / W)
+        disp = cv2.resize(img, (int(W * scale), int(H * scale)))
+        axes[ax_i].imshow(disp)
+
+        if len(u) > 0:
+            axes[ax_i].scatter(u * scale, v * scale,
+                               c="red", s=2, alpha=0.5, linewidths=0)
+        n_proj = int(in_frame.sum())
+        axes[ax_i].set_title(f"{img_name}\n{n_proj} pts projected", fontsize=8)
+        axes[ax_i].axis("off")
+
+    # 关闭多余的子图
+    for ax_i in range(len(sampled), len(axes)):
+        axes[ax_i].axis("off")
+
+    fig.suptitle(f'3D fusion 验证 — "{mask_label}"', fontsize=12)
+    plt.tight_layout()
+    plt.show()
+
+
+def query_2d_image(image_name: str, query: str, saga_cfg: dict, top_k: int = 3) -> None:
+    """
+    在单张 2D 图像上做文字查询，高亮显示 top-k 个最匹配的 SAM mask。
+
+    原理：OpenCLIP 本身没有定位能力，我们用 SAM mask 作为 region proposal，
+    对每个 mask 的预计算 CLIP 特征做 text-image cosine 相似度打分。
+
+    用法：
+        query_2d_image("IMG_20260402_120500.jpg", "coca cola can", saga_cfg)
+
+    参数：
+        image_name : 图像文件名（带扩展名），需在 image_root/images/ 下存在
+        query      : 自然语言查询词
+        saga_cfg   : pipeline.yaml 中的 saga 节
+        top_k      : 叠加显示前 k 个 mask（默认 3）
+    """
+    import sys
+    import cv2
+    import torch
+    import numpy as np
+    import matplotlib.pyplot as plt
+    import matplotlib.patches as mpatches
+
+    plt.switch_backend("TkAgg")
+
+    image_root, _ = _get_paths(saga_cfg)
+    stem = Path(image_name).stem
+
+    img_path  = image_root / "images" / image_name
+    feat_path = image_root / "clip_features" / (stem + ".pt")
+    mask_path = image_root / "sam_masks"     / (stem + ".pt")
+
+    if not img_path.exists():
+        print(f"✗ 图像不存在：{img_path}")
+        return
+    if not feat_path.exists():
+        print(f"✗ CLIP 特征不存在：{feat_path}（先跑 extract_clip_features）")
+        return
+    if not mask_path.exists():
+        print(f"✗ SAM mask 不存在：{mask_path}（先跑 extract_sam_masks）")
+        return
+
+    # 读取图像
+    img = cv2.imread(str(img_path))
+    img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+    H, W = img.shape[:2]
+
+    # 读取预计算特征 [N_mask, 512]
+    features = torch.load(feat_path, map_location="cpu")   # [N, 512]
+
+    # 读取 SAM masks [N_mask, h, w]（低分辨率，需 resize 到原图）
+    masks_raw = torch.load(mask_path, map_location="cpu")  # [N, h, w]
+    masks = torch.nn.functional.interpolate(
+        masks_raw.unsqueeze(0).float(), size=(H, W), mode="bilinear"
+    ).squeeze(0)
+    masks = (masks > 0.5).float()   # [N, H, W]
+
+    # 用 CLIP 模型打分（复用 clip_utils）
+    saga_dir = PROJECT_ROOT / "third_party" / "SAGA"
+    if str(saga_dir) not in sys.path:
+        sys.path.insert(0, str(saga_dir))
+
+    from clip_utils.clip_utils import load_clip
+    from clip_utils import get_scores
+
+    clip_model = load_clip()
+    clip_model.eval()
+
+    features_cuda = features.cuda()
+    scores = get_scores(clip_model, features_cuda, query).cpu().float()  # [N]
+
+    # 取 top-k mask，叠加到原图
+    topk_idx = scores.topk(min(top_k, len(scores))).indices.tolist()
+
+    overlay = img.copy().astype(np.float32)
+    colors  = [(255, 80, 80), (80, 200, 80), (80, 130, 255)]   # R G B per rank
+
+    fig, axes = plt.subplots(1, 2, figsize=(14, 6))
+
+    # 左图：原图
+    axes[0].imshow(img)
+    axes[0].set_title("原图")
+    axes[0].axis("off")
+
+    # 右图：叠加 top-k mask
+    result_img = img.copy().astype(np.float32)
+    legend_patches = []
+    for rank, idx in enumerate(topk_idx):
+        color = colors[rank % len(colors)]
+        m = masks[idx].numpy()                      # [H, W]  0/1
+        for c in range(3):
+            result_img[:, :, c] = np.where(
+                m > 0.5,
+                result_img[:, :, c] * 0.4 + color[c] * 0.6,
+                result_img[:, :, c]
+            )
+        score_val = scores[idx].item()
+        label = f"#{rank+1}  score={score_val:.3f}"
+        legend_patches.append(mpatches.Patch(
+            facecolor=[c/255 for c in color], label=label))
+
+    axes[1].imshow(result_img.astype(np.uint8))
+    axes[1].set_title(f'Query: "{query}"  top-{top_k} masks')
+    axes[1].axis("off")
+    axes[1].legend(handles=legend_patches, loc="lower right", fontsize=9)
+
+    plt.suptitle(image_name, fontsize=10, color="gray")
+    plt.tight_layout()
+    plt.show()

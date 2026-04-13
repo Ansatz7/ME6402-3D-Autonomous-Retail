@@ -2,12 +2,16 @@
 # =============================================================================
 # SAGA 环境安装脚本
 # 在已有的 gaussian_splatting conda 环境中安装 SAGA 所需额外依赖
+# 锁定 commit: 4acdaa6（验证环境：Python 3.10 + CUDA 11.8 + Ubuntu 20.04）
 #
 # 使用方法：
 #   source $HOME/miniconda3/bin/activate gaussian_splatting
 #   bash scripts/setup_saga.sh
 # =============================================================================
 set -euo pipefail
+
+# 锁定版本（此 commit 为本项目验证通过的版本）
+SAGA_COMMIT="4acdaa6"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -34,8 +38,18 @@ if [[ ! -d "$SAGA_DIR/.git" ]]; then
     echo ""
     echo ">>> 克隆 SAGA 仓库..."
     git clone --recursive https://github.com/Jumpat/SegAnyGAussians.git "$SAGA_DIR"
+    git -C "$SAGA_DIR" checkout "$SAGA_COMMIT"
+    git -C "$SAGA_DIR" submodule update --init --recursive
+    echo "✓ 已切换到锁定 commit: $SAGA_COMMIT"
 else
     echo "✓ SAGA 仓库已存在，更新子模块..."
+    CURRENT=$(git -C "$SAGA_DIR" rev-parse --short HEAD 2>/dev/null || echo "unknown")
+    if [[ "$CURRENT" != "$SAGA_COMMIT" ]]; then
+        echo "⚠️  当前 commit ($CURRENT) 与锁定版本 ($SAGA_COMMIT) 不同"
+        echo "   如需切换：git -C $SAGA_DIR checkout $SAGA_COMMIT"
+    else
+        echo "✓ Commit 匹配锁定版本：$SAGA_COMMIT"
+    fi
     git -C "$SAGA_DIR" submodule update --init --recursive
 fi
 
